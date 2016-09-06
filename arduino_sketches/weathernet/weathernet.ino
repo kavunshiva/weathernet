@@ -1,15 +1,18 @@
-/* Sketch to run on Adafruit Huzzah (ESP 8266) to pull pin high if substantial rain forecast.
+/*
+ * Sketch to run on Adafruit Huzzah (ESP 8266) to pull pin high if substantial rain forecast.
  * Low-power sleep functionality built in.
  * 
  * Borrows code from @thisoldgeek (https://github.com/thisoldgeek/ESP8266-Weather-Display/blob/master/ESP8266_Weather_Feather_Huzzah.ino)
  * for WiFi connection and precipitation data acquisiton and Michael Margolis and Tom Igoe (Udp NTP Client) for reading Internet time.
 */
 
+// include ESP8266, JSON parsing, serial, and Internet data logging libraries
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <SoftwareSerial.h>
 #include <ThingSpeak.h>
+
 // this is for the RTC memory read/write functions
 extern "C" {
 #include "user_interface.h"
@@ -28,6 +31,8 @@ rtcStore todValue;
 
 #define LOCATIONID ""                                           // location id
 
+
+// define hosts
 const char* HOST[] = {
   "api.wunderground.com",
   "api.thingspeak.com",
@@ -56,11 +61,14 @@ const float ADJ_VCC = 0.95;
 
 int rain; // rain variable (0 = no rain, 1 = rain)
 
-// Array of desired weather conditions. 
-// These must be in the order received from wunderground!
-// Also, watch out for repeating field names in returned json structures 
-// and fields with embedded commas (used as delimiters).
+/* 
+ * Array of desired weather conditions. 
+ * These must be in the order received from wunderground!
+ * Also, watch out for repeating field names in returned JSON structures 
+ * and fields with embedded commas (used as delimiters).
+*/
 
+// weather conditions to keep track of
 char* conds[] = {
   "\"fahrenheit\":",
   "\"mm\":"
@@ -71,6 +79,8 @@ const int NUM_ELEMENTS = 2;                                     // number of con
 void setup() {
   Serial.begin(115200);                                         // baudrate of monitor
   system_rtc_mem_read(64, &todValue, 8);
+  
+  // if it's time to check the time (nominally once a day), check the Internet time 
   if(todValue.magicNumber != 1337) {
     beginInternet();
     Serial.print("Setting time to: ");
@@ -82,6 +92,7 @@ void setup() {
     
   pinMode(GPIO_PIN, OUTPUT);
 
+  // read time of day from RTC memory and calculate time remaining until time is checked against the Internet
   system_rtc_mem_read(64, &todValue, 8);
   Serial.print("Time of day: ");
   Serial.println(todValue.tod);
@@ -90,20 +101,27 @@ void setup() {
   Serial.print("Time to read: ");
   Serial.println(timeToRead);
   
+  // if it's close to the time of day to read the time, read the time
   if (timeToRead < (ONE_HOUR / 1000000) && (timeToRead > 0)) {
+      
+    // however, if the time to read (the Internet time) is not quite close enough
+    // (more than half the maximum sleep time of the ESP8266), take a quick nap
     if(timeToRead > (ONE_HOUR / 2000000)) {
       uint32_t diff = timeToRead - ONE_HOUR / 2000000;
       todValue.tod += 60 + diff;
       system_rtc_mem_write(64, &todValue, 8);
-      ESP.deepSleep((60 + diff) * 1000000, WAKE_RFCAL);
+      ESP.deepSleep((60 + diff) * 1000000, WAKE_RFCAL);         // duration of nap time
     }
     beginInternet();
     wunderground();                                             // get new data
+    
+    // read the voltage at the chip (to determine battery state)
     Serial.print("Vcc: ");
     Serial.println(ESP.getVcc());
     float Vcc = ESP.getVcc() * ADJ_VCC / 1000;
     float post[NUM_ELEMENTS] = {rain, Vcc};
-    postThingspeak(post);
+    postThingspeak(post);                                       // post the expected rain state and battery state to Internet
+    
     // go to sleep, sweet microcontroller
     Serial.print("Going to sleep for this many seconds: ");
     uint32_t nap = (ONE_HOUR / 2 + timeToRead * 1000000);
@@ -112,16 +130,20 @@ void setup() {
     system_rtc_mem_write(64, &todValue, 8);
     ESP.deepSleep(nap, WAKE_RF_DISABLED);
   }
+
+  // if we wake up nowhere near the time of day to take our measurements and connect to the Internet,
+  // go back to sleep for the maximum possible time allowable by the ESP8266 microcontroller
   else {
     todValue.tod += ONE_HOUR / 1000000;
     system_rtc_mem_write(64, &todValue, 8);
     if (timeToRead < (ONE_HOUR / 1000000 * 1.5))
       ESP.deepSleep(ONE_HOUR, WAKE_RFCAL);                      // go to sleep, sweet microcontroller
     else
-      ESP.deepSleep(ONE_HOUR, WAKE_RF_DISABLED);                // go to sleep, sweet microcontroller
+      ESP.deepSleep(ONE_HOUR, WAKE_RF_DISABLED);                // go to sleep, sweet microcontroller (and wake with WiFi off)
   }
 }
 
+// nothing to loop, since we always restart when we go to sleep
 void loop() {
 }
 
@@ -174,11 +196,10 @@ void wunderground() {
         {json += ',';}                                          // add comma as element delimiter
   }                                                             // end for j loop
 
-  //Serial.print("JSON we're gonna parse: ");
-  //Serial.println(json);
   int params[NUM_ELEMENTS];
   parseJSON(json, params);                                      // extract the conditions
 
+  // if it's going to rain, pull pin high
   if (params[1] >= RAIN_THRESHOLD) {
     digitalWrite(GPIO_PIN, HIGH);
     Serial.print("GPIO pin ");
@@ -212,6 +233,7 @@ void parseJSON(String json, int params[])
   Serial.println(params[1]);
 }
 
+// serial print and post values to the Internet
 void postThingspeak(float value[]){
   WiFiClient client;
   ThingSpeak.begin(client);
@@ -253,8 +275,9 @@ int getTime() {
   packetBuffer[14]  = 49;
   packetBuffer[15]  = 52;
 
-  int i = 0;
+  int i = 0;                                                      // counter variable
 
+  // timeout loop that looks for UDP time packet
   while(i < 100) {
 
     WiFi.hostByName(HOST[2], timeServerIP);                       // get a random server from the pool
@@ -302,7 +325,7 @@ int getTime() {
       // print (and return) time of day (in secs)
       Serial.print("time of day (s) UTC : ");
       Serial.println(time_of_day);
-      return time_of_day;
+      return time_of_day;                                       // pass time and exit function
     }
   i++;
   }
