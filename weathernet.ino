@@ -1,7 +1,7 @@
 /*
  * Sketch to run on Adafruit Huzzah (ESP 8266) to pull pin high if substantial rain forecast.
  * Low-power sleep functionality built in.
- * 
+ *
  * Borrows code from @thisoldgeek (https://github.com/thisoldgeek/ESP8266-Weather-Display/blob/master/ESP8266_Weather_Feather_Huzzah.ino)
  * for WiFi connection and precipitation data acquisiton and Michael Margolis and Tom Igoe (Udp NTP Client) for reading Internet time.
 */
@@ -47,24 +47,24 @@ const char* YOUR_KEY[] = {
 
 const uint32_t TS_CHANNEL = ;                                   // ThingSpeak channel to which we wish to post our beloved data
 
-const int GPIO_PIN = 4; 
+const int GPIO_PIN = 4;
 const int BUFFER_SIZE = 300;                                    // length of json buffer
 
 const uint32_t ONE_HOUR = 3600000000;
 
 const int READ_TOD = ((5 + 4) * 3600) % 86400;                  // time of day (in seconds UTC) before which weather read should occur
                                                                 // 5 AM EDT (-0400 UTC) * 3600 s/hr
-                                                    
+
 const int RAIN_THRESHOLD = 10;                                  // amount of rain (in mm) above which we'll consider it to rain
 ADC_MODE(ADC_VCC);
 const float ADJ_VCC = 0.95;
 
-int rain; // rain variable (0 = no rain, 1 = rain)
+bool rain;
 
-/* 
- * Array of desired weather conditions. 
+/*
+ * Array of desired weather conditions.
  * These must be in the order received from wunderground!
- * Also, watch out for repeating field names in returned JSON structures 
+ * Also, watch out for repeating field names in returned JSON structures
  * and fields with embedded commas (used as delimiters).
 */
 
@@ -79,8 +79,8 @@ const int NUM_ELEMENTS = 2;                                     // number of con
 void setup() {
   Serial.begin(115200);                                         // baudrate of monitor
   system_rtc_mem_read(64, &todValue, 8);
-  
-  // if it's time to check the time (nominally once a day), check the Internet time 
+
+  // if it's time to check the time (nominally once a day), check the Internet time
   if(todValue.magicNumber != 1337) {
     beginInternet();
     Serial.print("Setting time to: ");
@@ -89,7 +89,7 @@ void setup() {
     todValue.magicNumber = 1337;
     system_rtc_mem_write(64, &todValue, 8);
   }
-    
+
   pinMode(GPIO_PIN, OUTPUT);
 
   // read time of day from RTC memory and calculate time remaining until time is checked against the Internet
@@ -100,10 +100,10 @@ void setup() {
   timeToRead = READ_TOD - todValue.tod;
   Serial.print("Time to read: ");
   Serial.println(timeToRead);
-  
+
   // if it's close to the time of day to read the time, read the time
   if (timeToRead < (ONE_HOUR / 1000000) && (timeToRead > 0)) {
-      
+
     // however, if the time to read (the Internet time) is not quite close enough
     // (more than half the maximum sleep time of the ESP8266), take a quick nap
     if(timeToRead > (ONE_HOUR / 2000000)) {
@@ -114,14 +114,14 @@ void setup() {
     }
     beginInternet();
     wunderground();                                             // get new data
-    
+
     // read the voltage at the chip (to determine battery state)
     Serial.print("Vcc: ");
     Serial.println(ESP.getVcc());
     float Vcc = ESP.getVcc() * ADJ_VCC / 1000;
     float post[NUM_ELEMENTS] = {rain, Vcc};
     postThingspeak(post);                                       // post the expected rain state and battery state to Internet
-    
+
     // go to sleep, sweet microcontroller
     Serial.print("Going to sleep for this many seconds: ");
     uint32_t nap = (ONE_HOUR / 2 + timeToRead * 1000000);
@@ -150,28 +150,28 @@ void loop() {
 void wunderground() {
   WiFiClient client;
   setupClient(client, 0);
-  
+
   String cmd = "GET /api/";  cmd += YOUR_KEY[0];                // build request_string cmd
   cmd += "/forecast/q/";  cmd += LOCATIONID;  cmd +=".json";
-  cmd += " HTTP/1.1\r\nHost: api.wunderground.com\r\n\r\n"; 
+  cmd += " HTTP/1.1\r\nHost: api.wunderground.com\r\n\r\n";
   delay(500);
   client.print(cmd);                                            // connect to api.wunderground.com with request_string
   delay(500);
   unsigned int i = 0;                                           // timeout counter
-                              
+
   String json = "{";                                            // first character for json-string is begin-bracket
-  
+
   for (int j = 0; j < NUM_ELEMENTS; j++) {                      // do the loop for every element/condition
     boolean quote = false; int nn = false;                      // if quote=false means no quotes so comma means break
     while (!client.find(conds[j])){}                            // (wait while we) find the part we are interested in
-                                                       
+
     json += conds[j];
 
     while (i < 5000) {                                          // timer/counter
       if(client.available()) {                                  // if character found in receive-buffer
         char c = client.read();                                 // read that character
-                                                  
-// ************************ construction of json string converting commas inside quotes to dots ********************        
+
+// ************************ construction of json string converting commas inside quotes to dots ********************
         if ((c == '"') && (quote == false))                     // there is a " and quote=false, so start of new element
           quote = true;                                         // make quote=true and notice place in string
         if ((c == '{') && (quote == false))
@@ -183,7 +183,7 @@ void wunderground() {
         if(((c == ',') || (c == '\n')) && (quote == false))
           break;                                                // if comma delimiter outside "" then end of this element
  //****************************** end of construction ******************************************************
-          
+
         json += c;                                              // fill json string with this character
         i = 0;                                                  // timer/counter + 1
       }
@@ -207,11 +207,11 @@ void wunderground() {
     Serial.println(" pulled high.");
     delay(100);
     digitalWrite(GPIO_PIN, LOW);
-    rain = 1;
+    rain = true;
   }
   else{
     Serial.println("No rain today.");
-    rain = 0;
+    rain = false;
   }
 }
 
@@ -220,7 +220,7 @@ void parseJSON(String json, int params[])
 {
   StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
   JsonObject& root = jsonBuffer.parseObject(json);
- 
+
   String temp_f = root["fahrenheit"];
   String qpf_allday = root["mm"];
 
@@ -238,7 +238,7 @@ void postThingspeak(float value[]){
   WiFiClient client;
   ThingSpeak.begin(client);
 
-  for (int i = 0; i < NUM_ELEMENTS; i++) { 
+  for (int i = 0; i < NUM_ELEMENTS; i++) {
     Serial.print("Logging field: ");
     Serial.print(i+1);
     Serial.print(" with value ");
@@ -260,7 +260,7 @@ int getTime() {
   udp.begin(localPort);
   Serial.print("Local port: ");
   Serial.println(udp.localPort());
-  
+
   // set all bytes in the buffer to 0
   memset(packetBuffer, 0, NTP_PACKET_SIZE);
   // Initialize values needed to form NTP request
@@ -283,35 +283,35 @@ int getTime() {
     WiFi.hostByName(HOST[2], timeServerIP);                       // get a random server from the pool
 
     Serial.println("sending NTP packet...");
-  
+
     // send a packet requesting a timestamp:
     udp.beginPacket(timeServerIP, 123);                           // NTP requests are to port 123
     udp.write(packetBuffer, NTP_PACKET_SIZE);
     udp.endPacket();
-  
+
     delay(1000);                                                  // wait to see if a reply is available
-  
+
     int cb = udp.parsePacket();
     if (!cb)
       Serial.println("no packet yet");
     else {
       Serial.print("packet received, length = ");
       Serial.println(cb);
-      
+
       udp.read(packetBuffer, NTP_PACKET_SIZE);                    // read the received packet into the buffer
-    
+
       // timestamp starts at byte 40 of the received packet and is
       // four bytes (two words) long. First, extract the two words:
-    
+
       unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
       unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
-      
+
       // combine the four bytes (two words) into a long integer
       // this is NTP time (seconds since Jan 1 1900):
       unsigned long secsSince1900 = highWord << 16 | lowWord;
       Serial.print("Seconds since Jan 1 1900 = " );
       Serial.println(secsSince1900);
-    
+
       // now convert NTP time into everyday time:
       Serial.print("Unix time = ");
       // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
@@ -334,9 +334,9 @@ int getTime() {
 void setupClient(WiFiClient& client, int host){
   Serial.print("connecting to ");
   Serial.println(HOST[host]);
-  
+
   const int httpPort = 80;
-  
+
   if (!client.connect(HOST[host], httpPort)) {
     Serial.println("connection failed");
     return;
@@ -350,7 +350,7 @@ void beginInternet() {
     Serial.print(".");                                          // print a few dots
   }
   Serial.println();
-  Serial.println("WiFi connected");  
+  Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 }
