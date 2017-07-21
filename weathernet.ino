@@ -80,26 +80,12 @@ void setup() {
   Serial.begin(115200);                                         // baudrate of monitor
   system_rtc_mem_read(64, &todValue, 8);
 
-  // if it's time to check the time (nominally once a day), check the Internet time
-  if(todValue.magicNumber != 1337) {
-    beginInternet();
-    Serial.print("Setting time to: ");
-    todValue.tod = getTime() % 86400;
-    Serial.print(todValue.tod);
-    todValue.magicNumber = 1337;
-    system_rtc_mem_write(64, &todValue, 8);
-  }
+  getTimeFromInternet(todValue);
+
+  readTimeFromMemory(todValue, READ_TOD);
 
   pinMode(GPIO_PIN, OUTPUT);
 
-  // read time of day from RTC memory and calculate time remaining until time is checked against the Internet
-  system_rtc_mem_read(64, &todValue, 8);
-  Serial.print("Time of day: ");
-  Serial.println(todValue.tod);
-  int timeToRead;
-  timeToRead = READ_TOD - todValue.tod;
-  Serial.print("Time to read: ");
-  Serial.println(timeToRead);
 
   // if it's close to the time of day to read the time, read the time
   if (timeToRead < (ONE_HOUR / 1000000) && (timeToRead > 0)) {
@@ -115,36 +101,71 @@ void setup() {
     beginInternet();
     wunderground();                                             // get new data
 
-    // read the voltage at the chip (to determine battery state)
-    Serial.print("Vcc: ");
-    Serial.println(ESP.getVcc());
-    float Vcc = ESP.getVcc() * ADJ_VCC / 1000;
+    // post the expected rain state and battery state to Internet
+    float Vcc = getVoltage(ADJ_VCC);
     float post[NUM_ELEMENTS] = {rain, Vcc};
-    postThingspeak(post);                                       // post the expected rain state and battery state to Internet
+    postThingspeak(post);
 
-    // go to sleep, sweet microcontroller
-    Serial.print("Going to sleep for this many seconds: ");
-    uint32_t nap = (ONE_HOUR / 2 + timeToRead * 1000000);
-    Serial.println(nap);
-    todValue.tod += nap;
-    system_rtc_mem_write(64, &todValue, 8);
-    ESP.deepSleep(nap, WAKE_RF_DISABLED);
+    nap(todValue, timeToRead, ONE_HOUR);
   }
 
   // if we wake up nowhere near the time of day to take our measurements and connect to the Internet,
   // go back to sleep for the maximum possible time allowable by the ESP8266 microcontroller
   else {
-    todValue.tod += ONE_HOUR / 1000000;
-    system_rtc_mem_write(64, &todValue, 8);
-    if (timeToRead < (ONE_HOUR / 1000000 * 1.5))
-      ESP.deepSleep(ONE_HOUR, WAKE_RFCAL);                      // go to sleep, sweet microcontroller
-    else
-      ESP.deepSleep(ONE_HOUR, WAKE_RF_DISABLED);                // go to sleep, sweet microcontroller (and wake with WiFi off)
+    sleep(todValue, ONE_HOUR);
   }
 }
 
 // nothing to loop, since we always restart when we go to sleep
 void loop() {
+}
+
+void getTimeFromInternet(todValue){
+  // if it's time to check the time (nominally once a day), check the Internet time
+  if(todValue.magicNumber != 1337) {
+    beginInternet();
+    Serial.print("Setting time to: ");
+    todValue.tod = getTime() % 86400;
+    Serial.print(todValue.tod);
+    todValue.magicNumber = 1337;
+    system_rtc_mem_write(64, &todValue, 8);
+  }
+}
+
+void readTimeFromMemory(todValue, READ_TOD){
+  // read time of day from RTC memory and calculate time remaining until time is checked against the Internet
+  system_rtc_mem_read(64, &todValue, 8);
+  Serial.print("Time of day: ");
+  Serial.println(todValue.tod);
+  int timeToRead = READ_TOD - todValue.tod;
+  Serial.print("Time to read: ");
+  Serial.println(timeToRead);
+}
+
+float getVoltage(ADJ_VCC){
+  // read the voltage at the chip (to determine battery state)
+  Serial.print("Vcc: ");
+  Serial.println(ESP.getVcc());
+  return ESP.getVcc() * ADJ_VCC / 1000;
+}
+
+void nap(todValue, timeToRead, ONE_HOUR){
+  // go to sleep, sweet microcontroller
+  Serial.print("Going to sleep for this many seconds: ");
+  uint32_t nap = (ONE_HOUR / 2 + timeToRead * 1000000);
+  Serial.println(nap);
+  todValue.tod += nap;
+  system_rtc_mem_write(64, &todValue, 8);
+  ESP.deepSleep(nap, WAKE_RF_DISABLED);
+}
+
+void sleep(todValue, ONE_HOUR){
+  todValue.tod += ONE_HOUR / 1000000;
+  system_rtc_mem_write(64, &todValue, 8);
+  if (timeToRead < (ONE_HOUR / 1000000 * 1.5))
+    ESP.deepSleep(ONE_HOUR, WAKE_RFCAL);                      // go to sleep, sweet microcontroller
+  else
+    ESP.deepSleep(ONE_HOUR, WAKE_RF_DISABLED);                // go to sleep, sweet microcontroller (and wake with WiFi off)
 }
 
 void wunderground() {
